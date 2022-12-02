@@ -55,6 +55,14 @@ data raw.occ_form_000;
     when (2) dm_sex_label = 'Female';
   end;
   
+  dm_ethnic = rand('Uniform') < 0.13;
+  dm_ethnic + 1;
+  length dm_ethnic_label $23;
+  select(dm_ethnic);
+    when (1) dm_ethnic_label = 'Non-Hispanic/Non-Latino';
+    when (2) dm_ethnic_label = 'Hispanic or Latino';
+  end;
+  
   dm_race_american_indian_or_ala = rand('Uniform') < 0.03;
   dm_race_asian                  = rand('Uniform') < 0.10;
   dm_race_black_or_african_ameri = rand('Uniform') < 0.30;
@@ -63,6 +71,7 @@ data raw.occ_form_000;
   dm_race_unk_dont_know          = rand('Uniform') < 0.04;
   
   edlevel_u = rand('Uniform');
+  length sc_edlevel_label $31;
   select;
     when (edlevel_u < 0.1)
       do;
@@ -96,6 +105,13 @@ data raw.occ_form_000;
 run;
 
 proc print data=raw.occ_form_000(obs=10);
+run;
+
+proc freq data=raw.occ_form_000;
+  tables
+    dm_sex*dm_sex_label
+    dm_ethnic*dm_ethnic_label
+    sc_edlevel*sc_edlevel_label / list;
 run;
 
 data raw.occ_form_011;
@@ -180,4 +196,22 @@ data raw.spirometry_upload;
 run;
 
 proc print data=raw.spirometry_upload(obs=10);
+run;
+
+data raw.occ_form_015;
+  set enrollment;
+  
+  rse_che = rand('Uniform') < 0.1;
+  length rse_che_label $3;
+  select(rse_che);
+    when (0) rse_che_label = 'No';
+    when (1) rse_che_label = 'Yes';
+  end;
+run;
+
+proc print data=raw.occ_form_015(obs=10);
+run;
+
+proc freq data=raw.occ_form_015;
+  tables rse_che*rse_che_label / list;
 run;
