@@ -68,7 +68,12 @@ data raw.occ_form_000;
   dm_race_black_or_african_ameri = rand('Uniform') < 0.30;
   dm_race_native_hawaiian_or_oth = rand('Uniform') < 0.01;
   dm_race_white                  = rand('Uniform') < 0.60;
-  dm_race_unk_dont_know          = rand('Uniform') < 0.04;
+  dm_race_unk_dont_know =
+    dm_race_american_indian_or_ala = 0 and
+    dm_race_asian = 0 and
+    dm_race_black_or_african_ameri = 0 and
+    dm_race_native_hawaiian_or_oth = 0 and
+    dm_race_white = 0;
   
   edlevel_u = rand('Uniform');
   length sc_edlevel_label $31;
