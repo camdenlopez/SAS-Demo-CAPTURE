@@ -112,10 +112,10 @@ proc freq data=copd;
   tables spirom_copd*mild_copd*clin_sig_copd / list missing;
 run;
 
-data patients;
+data analysis.patients;
   merge demog capture copd;
   by ssid;
 run;
 
-proc print data=patients(obs=10);
+proc print data=analysis.patients(obs=10);
 run;
