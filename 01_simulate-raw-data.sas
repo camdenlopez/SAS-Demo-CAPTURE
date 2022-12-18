@@ -1,27 +1,32 @@
-libname raw '~/CAPTURE/data/raw';
+libname raw '~/CAPTURE/data/raw/sas';
 
-%let n_pbrn = 2;
-%let n_practices = 10;
+%let n_pbrn = 5;
+%let n_practices = 100;
 %let patients_per_practice = 50;
+%let pbrn_codes = A B C D E F G H I J;
+%let pbrn_names = Atrium|Duke|High Plains|LA Net|Oregon|UIC|Circuit Clinical;
 
-data enroll_init(keep = pbrn_id pbrn_code pract_id patient_id);
-  array pbrn_codes[10] $1 ('A' 'B' 'C' 'D' 'E' 'F' 'G' 'H' 'I' 'J');
+data enroll_init(keep=pbrn_id pbrn_code pract_id patient_id);
+  length pbrn_code $1;
   do pract_id = 1 to &n_practices;
     pbrn_id = rand("Integer", 1, &n_pbrn);
-    pbrn_code = pbrn_codes[pbrn_id];
+    pbrn_code = scan("&pbrn_codes", pbrn_id);
     do patient_id = 1 to &patients_per_practice;
       output;
     end;
   end;
 run;
 
-proc sort data = enroll_init;
+proc freq data=enroll_init;
+  tables pbrn_id*pbrn_code / list nocum;
+run;
+
+proc sort data=enroll_init;
   by pbrn_id pract_id;
 run;
 
-data enrollment(keep = ssid ctx_site);
-  length ctx_site $3 ssid $7;
-  
+data enrollment(keep=ssid ctx_site);
+  length ctx_site $3 ssid $9;
   set enroll_init;
   by pbrn_id pract_id;
   
@@ -29,10 +34,10 @@ data enrollment(keep = ssid ctx_site);
   else if first.pract_id then pract_num + 1;
   
   ctx_site = cat(pbrn_code, put(pract_num, z2.));
-  ssid = cat(ctx_site, 'P', put(patient_id, z3.));
+  ssid = cat(ctx_site, 'F', put(patient_id, z5.));
 run;
 
-proc sort data = enrollment;
+proc sort data=enrollment;
   by ssid;
 run;
 
@@ -68,12 +73,20 @@ data raw.occ_form_000;
   dm_race_black_or_african_ameri = rand('Uniform') < 0.30;
   dm_race_native_hawaiian_or_oth = rand('Uniform') < 0.01;
   dm_race_white                  = rand('Uniform') < 0.60;
-  dm_race_unk_dont_know =
+  dm_race_unk_prefer_not_to_answ =
     dm_race_american_indian_or_ala = 0 and
     dm_race_asian = 0 and
     dm_race_black_or_african_ameri = 0 and
     dm_race_native_hawaiian_or_oth = 0 and
-    dm_race_white = 0;
+    dm_race_white = 0 and
+    rand('Uniform') < 0.50;
+  dm_race_unk_don_t_know =
+    dm_race_american_indian_or_ala = 0 and
+    dm_race_asian = 0 and
+    dm_race_black_or_african_ameri = 0 and
+    dm_race_native_hawaiian_or_oth = 0 and
+    dm_race_white = 0 and
+    dm_race_unk_prefer_not_to_answ = 0;
   
   edlevel_u = rand('Uniform');
   length sc_edlevel_label $31;
@@ -141,9 +154,9 @@ proc print data=raw.occ_form_011(obs=10);
 run;
 
 data raw.occ_form_012;
-  set raw.occ_form_000(keep = ctx_site ssid dm_sex_label);
+  set raw.occ_form_000(keep=ctx_site ssid dm_sex_label);
   
-  if dm_sex_label='Male' then
+  if dm_sex_label = 'Male' then
     vs_orres_height = rand('Gaussian', 70, 3);
   else
     vs_orres_height = rand('Gaussian', 64, 3);
@@ -156,10 +169,10 @@ run;
 
 data raw.spirometry_upload;
   merge
-    raw.occ_form_000(keep =
+    raw.occ_form_000(keep=
       ctx_site ssid dsstdat_ic dm_brthdatdt
       dm_sex_label dm_race_black_or_african_ameri)
-    raw.occ_form_012(keep = ssid vs_orres_height);
+    raw.occ_form_012(keep=ssid vs_orres_height);
   by ssid;
   
   age_y = (dsstdat_ic - dm_brthdatdt) / 365.25;
@@ -220,3 +233,36 @@ run;
 proc freq data=raw.occ_form_015;
   tables rse_che*rse_che_label / list;
 run;
+
+data pract_zips;
+  set enrollment(drop=ssid);
+  by ctx_site;
+  if first.ctx_site;
+  length pbrn_code $1 pbrn_name $24;
+  pbrn_code = substr(ctx_site, 1, 1);
+  pbrn_id = findw("&pbrn_codes", pbrn_code, ' ', 'e');
+  pbrn_name = scan("&pbrn_names", pbrn_id, '|');
+  zip = put(rand('Integer', 501, 99950), z5.);
+run;
+
+proc print data=pract_zips;
+run;
+
+libname zips xlsx '~/CAPTURE/data/raw/excel/CAPTURE practices and zipcodes.xlsx';
+
+%macro write_pbrn_zips(pbrn_name=);
+  data zips."&pbrn_name"n(rename=(ctx_site='Practice ID'n zip='Zip code'n));
+    set pract_zips;
+    if pbrn_name = "&pbrn_name";
+    keep ctx_site zip;
+  run;
+%mend write_pbrn_zips;
+
+%macro write_zips;
+  %do pbrn = 1 %to &n_pbrn;
+    %let name = %scan(&pbrn_names, &pbrn, |);
+    %write_pbrn_zips(pbrn_name=&name);
+  %end;
+%mend write_zips;
+
+%write_zips;
