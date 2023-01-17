@@ -1,14 +1,24 @@
+/*****************************
+ * Create analysis data sets *
+ *****************************/
+
 libname raw '~/CAPTURE/data/raw/sas';
 libname analysis '~/CAPTURE/data/analysis';
 
 %include '~/CAPTURE/code/00_formats.sas';
 
+/**********************
+ * Patient-level data *
+ **********************/
+
+/* Demographics */
+
 data demog(
-    keep =
+    keep=
       ssid ctx_site age gender
       ethnicity race education);
   set raw.occ_form_000(
-    rename =
+    rename=
       (dsstdat_ic = consent_dt
        dm_brthdatdt = birth_dt
        dm_sex = gender
@@ -39,12 +49,11 @@ data demog(
   end;
 run;
 
-proc sort data = demog;
+proc sort data=demog;
   by ssid;
 run;
 
-proc print data=demog(obs=10);
-run;
+/* CAPTURE scoring */
 
 data capture;
   set raw.occ_form_011;
@@ -61,27 +70,33 @@ data capture;
   end;
 run;
 
-proc sort data = capture;
+proc sort data=capture;
   by ssid;
 run;
 
+/* Spirometry */
+
 proc sort
-    data = raw.spirometry_upload
-    out = spirom_in(keep = ssid pp_fvc pp_fev
-                           fvc_pre_bd fev1_pre_bd
-                           fvc_post_bd fev1_post_bd);
+    data=raw.spirometry_upload
+    out=spirom_in(keep=ssid pp_fvc pp_fev
+                       fvc_pre_bd fev1_pre_bd
+                       fvc_post_bd fev1_post_bd);
   by ssid;
 run;
 
+/* Respiratory illness */
+
 proc sort
-    data = raw.occ_form_015(rename = (rse_che = acute_resp_illness))
-    out = sympt_in(keep = ssid acute_resp_illness);
+    data=raw.occ_form_015(rename=(rse_che=acute_resp_illness))
+    out=sympt_in(keep=ssid acute_resp_illness);
   by ssid;
 run;
+
+/* COPD classification */
 
 data copd(
-    keep = ssid post_bd fev1_fvc fev1_pp acute_resp_illness
-           clin_sig_copd spirom_copd mild_copd);
+    keep=ssid post_bd fev1_fvc fev1_pp acute_resp_illness
+         clin_sig_copd spirom_copd mild_copd);
   merge spirom_in sympt_in;
   by ssid;
   
@@ -109,13 +124,7 @@ data copd(
   mild_copd = spirom_copd and not clin_sig_copd;
 run;
 
-proc print data=copd(obs=10);
-run;
-
-proc freq data=copd;
-  tables spirom_copd*mild_copd*clin_sig_copd / list missing;
-run;
-
+/* Merged patient-level data */
 data analysis.patients;
   merge demog capture copd;
   by ssid;
@@ -127,10 +136,13 @@ data analysis.patients;
     capture_pos spirom_copd clin_sig_copd mild_copd yesno.;
 run;
 
-proc print data=analysis.patients(obs=10);
-run;
+/***********************
+ * Practice-level data *
+ ***********************/
 
 libname zips xlsx '~/CAPTURE/data/raw/excel/CAPTURE practices and zipcodes.xlsx';
+
+/* Classification of sites as rural or not */
 
 data pract_zips(rename=('Practice ID'n=ctx_site 'ZIP code'n=zip_code));
   set zips.Atrium
@@ -152,6 +164,9 @@ proc sort data=rural_zips;
   by zip_code;
 run;
 
+/* Initialize practice-level data set with only
+ * those practices that enrolled patients */
+
 data pract;
   set analysis.patients(keep=ctx_site);
 run;
@@ -159,6 +174,8 @@ run;
 proc sort data=pract nodupkey;
   by ctx_site;
 run;
+
+/* Bring in site ZIP codes */
 
 data pract;
   merge pract(in=in_pract)
@@ -171,11 +188,14 @@ proc sort data=pract;
   by zip_code;
 run;
 
+/* Practice-level data */
 data analysis.practices;
   merge pract(in=in_pract)
         rural_zips(in=in_rural keep=zip_code);
   by zip_code;
   if in_pract;
+  
+  /* Practice location (1=Non-rural, 2=Rural) */
   if in_rural then pract_location = 2;
   else             pract_location = 1;
   drop zip_code;
@@ -187,13 +207,7 @@ proc sort data=analysis.practices;
   by ctx_site;
 run;
 
-proc print data=analysis.practices;
-run;
-
-proc freq data=analysis.practices;
-  tables pract_location;
-run;
-
+/* Add practice-level data to patient-level data set */
 data analysis.patients;
   merge analysis.patients(in=in_patients)
         analysis.practices;
@@ -201,10 +215,26 @@ data analysis.patients;
   if in_patients;
 run;
 
+/*************************************************
+ * Subgroup cross-tabulations of CAPTURE vs COPD *
+ *************************************************/
+
+/* Calculate counts (TP, TN, FP, FN) that will be used
+ * for estimating sensitivity, specificity, etc within
+ * subgroups defined by 'var'
+ *
+ * This is needed to produce probability estimates
+ * using PROC FREQ when only one of the two outcome
+ * levels appears in the data (i.e. when a count of
+ * 0 occurs) */
 %macro make_subgroup_counts(var=);
-  proc means data=analysis.patients n completetypes nway;
+  data temp;
+    set analysis.patients;
+    count_weight = 1;
+  run;
+  proc means data=temp n completetypes nway;
     class &var clin_sig_copd capture_pos / preloadfmt;
-    var age; /* Any numeric variable with no missing values */
+    var count_weight; /* Any numeric variable with no missing values */
     output out=analysis.cap_copd_&var(drop=_type_ _freq_) n=count;
   run;
 %mend make_subgroup_counts;
@@ -214,9 +244,3 @@ run;
 %make_subgroup_counts(var=race);
 %make_subgroup_counts(var=pract_location);
 %make_subgroup_counts(var=education);
-
-proc print data=analysis.cap_copd_gender; run;
-proc print data=analysis.cap_copd_ethnicity; run;
-proc print data=analysis.cap_copd_race; run;
-proc print data=analysis.cap_copd_pract_location; run;
-proc print data=analysis.cap_copd_education; run;

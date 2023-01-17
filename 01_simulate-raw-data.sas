@@ -1,13 +1,33 @@
+/***********************************************************************
+ * Simulate raw study data, mimicking the actual study database tables *
+ ***********************************************************************/
+
 libname raw '~/CAPTURE/data/raw/sas';
 
-%let n_pbrn = 5;
+/* Number of PBRNs */
+%let n_pbrn = 7;
+
+/* Total number of practices (study sites) */
 %let n_practices = 100;
+
+/* Patients to be enrolled per practice */
 %let patients_per_practice = 50;
-%let pbrn_codes = A B C D E F G H I J;
+
+/* PBRN codes used in study site and patient identifiers */
+%let pbrn_codes = A B C D E F G;
+
+/* PBRN names corresponding to the codes above */
 %let pbrn_names = Atrium|Duke|High Plains|LA Net|Oregon|UIC|Circuit Clinical;
 
+/***********************************************
+ * Preliminary table of practices and patients *
+ ***********************************************/
+
+/* Randomly assign each practice to a PBRN,
+ * and enroll the target number of patients */
 data enroll_init(keep=pbrn_id pbrn_code pract_id patient_id);
   length pbrn_code $1;
+  
   do pract_id = 1 to &n_practices;
     pbrn_id = rand("Integer", 1, &n_pbrn);
     pbrn_code = scan("&pbrn_codes", pbrn_id);
@@ -17,14 +37,13 @@ data enroll_init(keep=pbrn_id pbrn_code pract_id patient_id);
   end;
 run;
 
-proc freq data=enroll_init;
-  tables pbrn_id*pbrn_code / list nocum;
-run;
-
 proc sort data=enroll_init;
   by pbrn_id pract_id;
 run;
 
+/* To form the site and patient identifiers,
+ * need to number the practices 1 to k within
+ * each PBRN */
 data enrollment(keep=ssid ctx_site);
   length ctx_site $3 ssid $9;
   set enroll_init;
@@ -33,7 +52,10 @@ data enrollment(keep=ssid ctx_site);
   if first.pbrn_id then pract_num = 1;
   else if first.pract_id then pract_num + 1;
   
+  /* Site identifier */
   ctx_site = cat(pbrn_code, put(pract_num, z2.));
+  
+  /* Patient identifier */
   ssid = cat(ctx_site, 'F', put(patient_id, z5.));
 run;
 
@@ -41,18 +63,22 @@ proc sort data=enrollment;
   by ssid;
 run;
 
-proc print data=enrollment(obs=10);
-run;
+/*******************************
+ * OCC_FORM_000 (Demographics) *
+ *******************************/
 
 data raw.occ_form_000;
   set enrollment;
   
+  /* Consent (enrollment) date */
   dsstdat_ic = '01APR2018'd + rand('Integer', 1, 1278);
   
+  /* Age and date of birth */
   age_days = rand('Integer', round(365.25 * 45), round(365.25 * 80));
   dm_brthdatdt = dsstdat_ic - age_days;
   drop age_days;
   
+  /* Gender */
   dm_sex = rand('Integer', 1, 2);
   length dm_sex_label $6;
   select(dm_sex);
@@ -60,6 +86,7 @@ data raw.occ_form_000;
     when (2) dm_sex_label = 'Female';
   end;
   
+  /* Ethnicity */
   dm_ethnic = rand('Uniform') < 0.13;
   dm_ethnic + 1;
   length dm_ethnic_label $23;
@@ -68,6 +95,7 @@ data raw.occ_form_000;
     when (2) dm_ethnic_label = 'Hispanic or Latino';
   end;
   
+  /* Race (patient can select multiple) */
   dm_race_american_indian_or_ala = rand('Uniform') < 0.03;
   dm_race_asian                  = rand('Uniform') < 0.10;
   dm_race_black_or_african_ameri = rand('Uniform') < 0.30;
@@ -88,6 +116,7 @@ data raw.occ_form_000;
     dm_race_white = 0 and
     dm_race_unk_prefer_not_to_answ = 0;
   
+  /* Education */
   edlevel_u = rand('Uniform');
   length sc_edlevel_label $31;
   select;
@@ -122,19 +151,14 @@ data raw.occ_form_000;
   format dsstdat_ic dm_brthdatdt date9.;
 run;
 
-proc print data=raw.occ_form_000(obs=10);
-run;
-
-proc freq data=raw.occ_form_000;
-  tables
-    dm_sex*dm_sex_label
-    dm_ethnic*dm_ethnic_label
-    sc_edlevel*sc_edlevel_label / list;
-run;
+/*******************************
+ * OCC_FORM_011 (CAPTURE Tool) *
+ *******************************/
 
 data raw.occ_form_011;
   set enrollment;
   
+  /* CAPTURE questionnaire responses */
   cap1 = rand('Uniform') < 0.6;
   cap2 = rand('Uniform') < 0.4;
   cap3 = rand('Uniform') < 0.3;
@@ -146,16 +170,19 @@ data raw.occ_form_011;
   else cap5 = 0;
   drop cap5_u;
   
+  /* CAPTURE score and PEFR (0=Normal, 1=Below threshold) */
   cap_score = sum(cap1, cap2, cap3, cap4, cap5);
   cap_ref = rand('Uniform') < 0.2;
 run;
 
-proc print data=raw.occ_form_011(obs=10);
-run;
+/*****************************
+ * OCC_FORM_012 (Spirometry) *
+ *****************************/
 
 data raw.occ_form_012;
   set raw.occ_form_000(keep=ctx_site ssid dm_sex_label);
   
+  /* Height in inches */
   if dm_sex_label = 'Male' then
     vs_orres_height = rand('Gaussian', 70, 3);
   else
@@ -164,8 +191,9 @@ data raw.occ_form_012;
   drop dm_sex_label;
 run;
 
-proc print data=raw.occ_form_012(obs=10);
-run;
+/***********************************************
+ * SPIROMETRY_UPLOAD (Spirometry measurements) *
+ ***********************************************/
 
 data raw.spirometry_upload;
   merge
@@ -175,10 +203,12 @@ data raw.spirometry_upload;
     raw.occ_form_012(keep=ssid vs_orres_height);
   by ssid;
   
+  /* Inputs for FVC and FEV1 prediction */
   age_y = (dsstdat_ic - dm_brthdatdt) / 365.25;
   height_cm = 2.54 * vs_orres_height;
   drop dsstdat_ic dm_brthdatdt vs_orres_height;
   
+  /* Calculate predicted FVC and FEV1 using the NHANES equations */
   select;
     when (dm_sex_label = 'Male' and dm_race_black_or_african_ameri = 0)
       do;
@@ -203,9 +233,12 @@ data raw.spirometry_upload;
   end;
   drop dm_sex_label dm_race_black_or_african_ameri age_y height_cm;
   
+  /* Pre-bronchodilator measurements */
   fvc_pre_bd  = round(0.3 + 0.8 * pp_fvc + rand('Gaussian', 0, 0.5), 0.01);
   fev1_pre_bd = round(0.2 + 0.8 * pp_fev + rand('Gaussian', 0, 0.5), 0.01);
   
+  /* Post-bronchodilator measurements collected
+   * only if pre-BD spirometry was 'abnormal' */
   if fev1_pre_bd/fvc_pre_bd < 0.7 or fev1_pre_bd/pp_fev < 0.8 then
     do;
       fvc_post_bd  = round(0.15 + 0.7 * pp_fvc + rand('Gaussian', 0, 0.5), 0.01);
@@ -213,12 +246,16 @@ data raw.spirometry_upload;
     end;
 run;
 
-proc print data=raw.spirometry_upload(obs=10);
-run;
+/***************************************
+ * OCC_FORM_015 (Respiratory Symptoms) *
+ ***************************************/
 
 data raw.occ_form_015;
   set enrollment;
   
+  /* Over the last 12 months, have you had episodes of chest troubles
+   * (cough, phlegm, or shortness of breath) requiring treatment with
+   * antibiotics and/or steroids? */
   rse_che = rand('Uniform') < 0.1;
   length rse_che_label $3;
   select(rse_che);
@@ -227,29 +264,29 @@ data raw.occ_form_015;
   end;
 run;
 
-proc print data=raw.occ_form_015(obs=10);
-run;
-
-proc freq data=raw.occ_form_015;
-  tables rse_che*rse_che_label / list;
-run;
+/************************
+ * Study site ZIP codes *
+ ************************/
 
 data pract_zips;
   set enrollment(drop=ssid);
   by ctx_site;
   if first.ctx_site;
+  
   length pbrn_code $1 pbrn_name $24;
+  /* Get PBRN name to use as the Excel sheet name */
   pbrn_code = substr(ctx_site, 1, 1);
   pbrn_id = findw("&pbrn_codes", pbrn_code, ' ', 'e');
   pbrn_name = scan("&pbrn_names", pbrn_id, '|');
+  
+  /* Random ZIP code */
   zip = put(rand('Integer', 501, 99950), z5.);
 run;
 
-proc print data=pract_zips;
-run;
-
+/* Create Excel file containing site ZIP codes */
 libname zips xlsx '~/CAPTURE/data/raw/excel/CAPTURE practices and zipcodes.xlsx';
 
+/* Output one sheet corresponding to one PBRN */
 %macro write_pbrn_zips(pbrn_name=);
   data zips."&pbrn_name"n(rename=(ctx_site='Practice ID'n zip='Zip code'n));
     set pract_zips;
@@ -258,6 +295,7 @@ libname zips xlsx '~/CAPTURE/data/raw/excel/CAPTURE practices and zipcodes.xlsx'
   run;
 %mend write_pbrn_zips;
 
+/* Output sheets for all PBRNs */
 %macro write_zips;
   %do pbrn = 1 %to &n_pbrn;
     %let name = %scan(&pbrn_names, &pbrn, |);
